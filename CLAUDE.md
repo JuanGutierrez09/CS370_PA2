@@ -1,20 +1,20 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## Project status
-
-This repository is an early-stage scaffold for a red-black tree implementation in C. As of the initial commit, all files are empty placeholders:
-
-- `include/rbtree.h` — public header (empty)
-- `src/rbtree.c` — implementation (empty)
-- `tests/test_rbtree.c` — unit tests (empty)
-- `tests/fuzz.c` — fuzz test harness (empty)
-- `Makefile` — build configuration (empty)
-- `PROMPTLOG.md` — presumably a log of prompts/decisions for this project (empty)
-
-There is no build system, source code, or test suite yet. Do not assume any commands (make, gcc flags, test runners) or architecture beyond what is described above — verify against the actual file contents before relying on anything here, since this section will be outdated as soon as real code is added.
-
-## Working in this repo
-
-Given the layout, the project is intended to be a C library exposing a red-black tree via `include/rbtree.h`, implemented in `src/rbtree.c`, with correctness tests in `tests/test_rbtree.c` and a fuzzing harness in `tests/fuzz.c`, built via the `Makefile`. When adding the first real content, update this file with the actual build/test/run commands and any architectural decisions (e.g., node structure, whether it's intrusive or value-owning, thread-safety guarantees) once they exist in code.
+# rbtree-lab: project rules
+## Commands
+- Build & unit tests: ‘make test‘
+- Sanitizers: ‘make asan‘ Valgrind: ‘make memcheck‘
+- A change is DONE only when all three pass. Always run them; show output.
+## Hard constraints
+- NEVER modify include/rbtree.h. It is the graded contract.
+- Check every allocation. malloc can return NULL; a NULL return must
+leave the tree unchanged and return the documented error code.
+- NEVER weaken, skip, or delete a test to make the suite pass. If a test
+looks wrong, stop and explain why instead.
+## Style
+- C23. -Wall -Wextra -Werror must stay clean. No VLAs.
+- Error handling: goto-cleanup pattern for multi-allocation functions.
+- Prefer the smallest diff that passes. Do not refactor unrelated code.
+- Every non-obvious loop gets a one-line invariant comment.
+## Workflow
+- For any multi-file or algorithmic change: propose a plan and wait for
+approval before editing.
+- Commit only from a green state; message format "M<n>: <what>".
