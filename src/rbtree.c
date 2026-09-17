@@ -26,43 +26,21 @@ struct rbtree {
 };
 
 /* Shared sentinel used as every leaf and as the root's parent; always
- * black. Its left/right/parent fields are otherwise unused, except that
- * delete_fixup() temporarily sets NIL_NODE.parent so the fixup loop can
- * climb from a NIL position (the standard CLRS technique; safe only
- * because there is a single global sentinel and no concurrent use). */
+ * black. Balancing helpers (rotate_left/rotate_right/insert_fixup/
+ * delete_fixup/is_red) land in a later slice, once rb_insert/rb_delete
+ * actually call them -- an unused static function is a hard error under
+ * -Werror here, so they aren't declared until they're wired in. */
 static struct rb_node NIL_NODE = { .color = BLACK };
 #define NIL (&NIL_NODE)
 
-/* ---- static helpers (declared now; bodies land with each vertical slice) ---- */
-
-static bool is_red(const struct rb_node *n);
-
-static void replace_child(rbtree_t *t, struct rb_node *parent,
-                           struct rb_node *old_child, struct rb_node *new_child);
-static void rotate_left(rbtree_t *t, struct rb_node *x);
-static void rotate_right(rbtree_t *t, struct rb_node *x);
-static struct rb_node *sibling_of(const struct rb_node *parent,
-                                   const struct rb_node *child);
+/* ---- static helpers ---- */
 
 static struct rb_node *bst_search(const rbtree_t *t, const char *key,
                                    struct rb_node **out_parent);
-
 static char *copy_key(const char *key);
 static struct rb_node *node_alloc(void);
-static void insert_fixup(rbtree_t *t, struct rb_node *z);
-
-static struct rb_node *subtree_min(struct rb_node *n);
-static void delete_fixup(rbtree_t *t, struct rb_node *x);
-
 static void node_destroy(rbtree_t *t, struct rb_node *n);
 static void free_subtree(rbtree_t *t, struct rb_node *n);
-
-static void inorder_walk(const struct rb_node *n,
-                          void (*fn)(const char *key, void *value, void *ctx),
-                          void *ctx);
-
-static int validate_subtree(const struct rb_node *n, const char *lo, const char *hi,
-                             size_t *count, int *black_height);
 
 /* ---- public API (include/rbtree.h is the contract; do not edit it) ---- */
 
@@ -82,32 +60,61 @@ rbtree_t *rb_create(rb_value_free_fn value_free)
 
 int rb_insert(rbtree_t *t, const char *key, void *value)
 {
-    (void)t;
-    (void)key;
-    (void)value;
-    /* TODO: bst_search() for the attach point / an existing node; on a
-     * miss, node_alloc() + copy_key() with goto-cleanup on key-copy
-     * failure (2-allocation path per CLAUDE.md); attach under the found
-     * parent; insert_fixup(); size++. */
+    struct rb_node *parent = NIL;
+    struct rb_node *existing = bst_search(t, key, &parent);
+
+    if (existing != NIL) {
+        if (t->value_free != NULL) {
+            t->value_free(existing->value);
+        }
+        existing->value = value;
+        return 0;
+    }
+
+    struct rb_node *z = node_alloc();
+    if (z == NULL) {
+        return -1;
+    }
+
+    z->key = copy_key(key);
+    if (z->key == NULL) {
+        goto cleanup_node;
+    }
+    z->value = value;
+    z->parent = parent;
+
+    if (parent == NIL) {
+        t->root = z;
+    } else if (strcmp(key, parent->key) < 0) {
+        parent->left = z;
+    } else {
+        parent->right = z;
+    }
+
+    t->size++;
+    /* TODO: insert_fixup(t, z) once rotations/fixup land -- until then
+     * this is a plain (unbalanced) BST insert. */
+    return 0;
+
+cleanup_node:
+    free(z);
     return -1;
 }
 
 void *rb_find(const rbtree_t *t, const char *key)
 {
-    (void)t;
-    (void)key;
-    /* TODO: struct rb_node *n = bst_search(t, key, NULL);
-     * return n != NIL ? n->value : NULL; */
-    return NULL;
+    struct rb_node *n = bst_search(t, key, NULL);
+    return (n != NIL) ? n->value : NULL;
 }
 
 int rb_delete(rbtree_t *t, const char *key)
 {
     (void)t;
     (void)key;
-    /* TODO: bst_search() for the node; splice it out via replace_child()
-     * (using subtree_min() for the two-children case); delete_fixup() if
-     * the spliced-out node was black; node_destroy(); size--. */
+    /* TODO: bst_search() for the node; splice it out via a replace_child()
+     * helper (using a subtree-minimum helper for the two-children case);
+     * delete_fixup() if the spliced-out node was black; free its key/value
+     * and itself; size--. */
     return -1;
 }
 
@@ -124,15 +131,15 @@ void rb_foreach(const rbtree_t *t,
         return;
     }
     (void)ctx;
-    /* TODO: inorder_walk(t->root, fn, ctx); */
+    /* TODO: recursive in-order walk over t->root calling fn(key, value, ctx). */
 }
 
 int rb_validate(const rbtree_t *t)
 {
     (void)t;
-    /* TODO: size_t count = 0; int black_height = 0;
-     * validate_subtree(t->root, NULL, NULL, &count, &black_height), plus
-     * a root-is-black check and count == t->size. */
+    /* TODO: recursive check of BST ordering, no red-red violations, equal
+     * black-height on both children, root-is-black, and a node count that
+     * matches t->size. */
     return -1;
 }
 
@@ -141,7 +148,85 @@ void rb_destroy(rbtree_t *t)
     if (t == NULL) {
         return;
     }
-    /* TODO: free_subtree(t, t->root); (no leak yet: the tree can't hold
-     * nodes until rb_insert() is implemented). */
+    free_subtree(t, t->root);
     free(t);
+}
+
+/* ---- helper bodies ---- */
+
+static struct rb_node *bst_search(const rbtree_t *t, const char *key,
+                                   struct rb_node **out_parent)
+{
+    struct rb_node *parent = NIL;
+    struct rb_node *n = t->root;
+
+    /* invariant: n is always a strict descendant of parent (or NIL, while
+     * still at the root), so each iteration strictly descends the tree
+     * and the loop terminates at a leaf. */
+    while (n != NIL) {
+        int cmp = strcmp(key, n->key);
+        if (cmp == 0) {
+            if (out_parent != NULL) {
+                *out_parent = n->parent;
+            }
+            return n;
+        }
+        parent = n;
+        n = (cmp < 0) ? n->left : n->right;
+    }
+
+    if (out_parent != NULL) {
+        *out_parent = parent;
+    }
+    return NIL;
+}
+
+static char *copy_key(const char *key)
+{
+    size_t len = strlen(key) + 1;
+    char *copy = malloc(len);
+    if (copy == NULL) {
+        return NULL;
+    }
+    memcpy(copy, key, len);
+    return copy;
+}
+
+static struct rb_node *node_alloc(void)
+{
+    struct rb_node *n = malloc(sizeof *n);
+    if (n == NULL) {
+        return NULL;
+    }
+
+    n->key = NULL;
+    n->value = NULL;
+    n->color = RED;
+    n->left = NIL;
+    n->right = NIL;
+    n->parent = NIL;
+
+    return n;
+}
+
+static void node_destroy(rbtree_t *t, struct rb_node *n)
+{
+    free(n->key);
+    if (t->value_free != NULL) {
+        t->value_free(n->value);
+    }
+    free(n);
+}
+
+static void free_subtree(rbtree_t *t, struct rb_node *n)
+{
+    /* invariant: each recursive call operates on a strictly smaller
+     * subtree (one fewer node between n and the nearest NIL leaf), so
+     * recursion terminates at NIL; depth is bounded by tree height. */
+    if (n == NIL) {
+        return;
+    }
+    free_subtree(t, n->left);
+    free_subtree(t, n->right);
+    node_destroy(t, n);
 }
