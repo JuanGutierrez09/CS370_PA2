@@ -48,6 +48,8 @@ static int is_red(const struct rb_node *n);
 static void rotate_left(rbtree_t *t, struct rb_node *x);
 static void rotate_right(rbtree_t *t, struct rb_node *x);
 static void insert_fixup(rbtree_t *t, struct rb_node *z);
+static int check_bst_order(const struct rb_node *n, const char **prev);
+static int check_rb_shape(const struct rb_node *n, size_t *count);
 
 /* ---- public API (include/rbtree.h is the contract; do not edit it) ---- */
 
@@ -144,11 +146,23 @@ void rb_foreach(const rbtree_t *t,
 
 int rb_validate(const rbtree_t *t)
 {
-    (void)t;
-    /* TODO: recursive check of BST ordering, no red-red violations, equal
-     * black-height on both children, root-is-black, and a node count that
-     * matches t->size. */
-    return -1;
+    if (t->root == NIL) {
+        return (t->size == 0) ? 0 : -1;
+    }
+    if (t->root->color != BLACK) {
+        return -1;
+    }
+    
+    const char *prev = NULL;
+    if (check_bst_order(t->root, &prev) != 0) {
+        return -1;
+    }
+
+    size_t count = 0;
+    if (check_rb_shape(t->root, &count) < 0) {
+        return -1;
+    }
+    return (count == t->size) ? 0 : -1;
 }
 
 void rb_destroy(rbtree_t *t)
@@ -264,7 +278,54 @@ static void insert_fixup(rbtree_t *t, struct rb_node *z)
     t->root->color = BLACK;
 }
 
+/* In-order walk enforcing strictly increasing keys. *prev starts NULL and
+ * is updated after every visited node; invariant: on return, *prev holds
+ * the largest key seen so far in this walk, so each new node is compared
+ * against the correct predecessor regardless of recursion depth. Returns
+ * 0 if order holds throughout, nonzero on the first violation found. */
+static int check_bst_order(const struct rb_node *n, const char **prev)
+{
+    if (n == NIL) {
+        return 0;
+    }
+    if (check_bst_order(n->left, prev) != 0) {
+        return -1;
+    }
+    if (*prev != NULL && strcmp(n->key, *prev) <= 0) {
+        return -1;
+    }
+    *prev = n->key;
+    return check_bst_order(n->right, prev);
+}
 
+/* Post-order walk checking, in one pass, that no red node has a red child
+ * and that both children of every node have equal black-height; *count is
+ * incremented once per real (non-NIL) node visited. Returns this
+ * subtree's black-height, or -1 if a violation was found anywhere in it --
+ * the -1 sentinel short-circuits back up through the recursion without
+ * further checks once a violation is found. */
+static int check_rb_shape(const struct rb_node *n, size_t *count)
+{
+    if (n == NIL) {
+        return 0;
+    }
+    int left_bh = check_rb_shape(n->left, count);
+    if (left_bh < 0) {
+        return -1;
+    }
+    int right_bh = check_rb_shape(n->right, count);
+    if (right_bh < 0) {
+        return -1;
+    }
+    if (left_bh != right_bh) {
+        return -1;
+    }
+    if (n->color == RED && (n->left->color != BLACK || n->right->color != BLACK)) {
+        return -1;
+    }
+    (*count)++;
+    return left_bh + (n->color == BLACK ? 1 : 0);
+}
 
 static void inorder_walk(
     struct rb_node *n,
