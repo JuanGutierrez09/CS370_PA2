@@ -27,11 +27,10 @@ struct rbtree {
 };
 
 /* Shared sentinel used as every leaf and as the root's parent; always
- * black. Balancing helpers (rotate_left/rotate_right/insert_fixup/
- * delete_fixup/is_red) land in a later slice, once rb_insert/rb_delete
- * actually call them -- an unused static function is a hard error under
- * -Werror here, so they aren't declared until they're wired in. */
-static struct rb_node NIL_NODE = { .color = BLACK };
+ * black. */
+static struct rb_node NIL_NODE = {
+    .color = BLACK, .left = &NIL_NODE, .right = &NIL_NODE, .parent = &NIL_NODE
+};
 #define NIL (&NIL_NODE)
 
 /* ---- static helpers ---- */
@@ -45,6 +44,11 @@ static void free_subtree(rbtree_t *t, struct rb_node *n);
 static void inorder_walk(struct rb_node *n,
                           void (*fn)(const char *key, void *value, void *ctx),
                           void *ctx);
+static int is_red(const struct rb_node *n);
+static void rotate_left(rbtree_t *t, struct rb_node *x);
+static void rotate_right(rbtree_t *t, struct rb_node *x);
+static void insert_fixup(rbtree_t *t, struct rb_node *z);
+
 /* ---- public API (include/rbtree.h is the contract; do not edit it) ---- */
 
 rbtree_t *rb_create(rb_value_free_fn value_free)
@@ -95,8 +99,8 @@ int rb_insert(rbtree_t *t, const char *key, void *value)
     }
 
     t->size++;
-    /* TODO: insert_fixup(t, z) once rotations/fixup land -- until then
-     * this is a plain (unbalanced) BST insert. */
+    insert_fixup(t, z);
+
     return 0;
 
 cleanup_node:
@@ -159,6 +163,8 @@ void rb_destroy(rbtree_t *t)
 /* ---- helper bodies ---- */
 
 
+/* Precondition: x->right != NIL (rotate_left needs a real right child to
+ * pivot up). */
 static void rotate_left(rbtree_t *t, struct rb_node *x)
 {
     struct rb_node *y = x->right;
@@ -182,6 +188,80 @@ static void rotate_left(rbtree_t *t, struct rb_node *x)
 
     y->left=x;
     x->parent = y;
+}
+
+/* Precondition: x->left != NIL (rotate_right needs a real left child to
+ * pivot up). */
+static void rotate_right(rbtree_t *t, struct rb_node *x)
+{
+    struct rb_node *y = x->left;
+    x->left = y->right;
+
+    if (y->right != NIL) {
+        y->right->parent = x;
+    }
+
+    y->parent = x->parent;
+
+    if (x->parent == NIL) {
+        t->root = y;
+    } else if (x == x->parent->right) {
+        x->parent->right = y;
+    } else {
+        x->parent->left = y;
+    }
+
+    y->right = x;
+    x->parent = y;
+}
+
+static int is_red(const struct rb_node *n)
+{
+    return n->color == RED;
+}
+
+static void insert_fixup(rbtree_t *t, struct rb_node *z)
+{
+    /* invariant: z is red; each iteration either resolves the red-red
+     * conflict (uncle red -> recolor and move z to the grandparent) or
+     * fixes it with rotations and exits, so the loop terminates once z's
+     * parent is black (root's parent NIL is always black). */
+    while (is_red(z->parent)) {
+        if (z->parent == z->parent->parent->left) {
+            struct rb_node *y = z->parent->parent->right; /* uncle */
+            if (is_red(y)) {
+                z->parent->color = BLACK;
+                y->color = BLACK;
+                z->parent->parent->color = RED;
+                z = z->parent->parent;
+            } else {
+                if (z == z->parent->right) {
+                    z = z->parent;
+                    rotate_left(t, z);
+                }
+                z->parent->color = BLACK;
+                z->parent->parent->color = RED;
+                rotate_right(t, z->parent->parent);
+            }
+        } else {
+            struct rb_node *y = z->parent->parent->left; /* uncle */
+            if (is_red(y)) {
+                z->parent->color = BLACK;
+                y->color = BLACK;
+                z->parent->parent->color = RED;
+                z = z->parent->parent;
+            } else {
+                if (z == z->parent->left) {
+                    z = z->parent;
+                    rotate_right(t, z);
+                }
+                z->parent->color = BLACK;
+                z->parent->parent->color = RED;
+                rotate_left(t, z->parent->parent);
+            }
+        }
+    }
+    t->root->color = BLACK;
 }
 
 
