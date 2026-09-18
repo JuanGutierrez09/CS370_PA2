@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+
 enum color {
     RED,
     BLACK
@@ -41,7 +42,9 @@ static char *copy_key(const char *key);
 static struct rb_node *node_alloc(void);
 static void node_destroy(rbtree_t *t, struct rb_node *n);
 static void free_subtree(rbtree_t *t, struct rb_node *n);
-
+static void inorder_walk(struct rb_node *n,
+                          void (*fn)(const char *key, void *value, void *ctx),
+                          void *ctx);
 /* ---- public API (include/rbtree.h is the contract; do not edit it) ---- */
 
 rbtree_t *rb_create(rb_value_free_fn value_free)
@@ -123,6 +126,8 @@ size_t rb_size(const rbtree_t *t)
     return t->size;
 }
 
+
+
 void rb_foreach(const rbtree_t *t,
                 void (*fn)(const char *key, void *value, void *ctx),
                 void *ctx)
@@ -130,8 +135,7 @@ void rb_foreach(const rbtree_t *t,
     if (t == NULL || fn == NULL) {
         return;
     }
-    (void)ctx;
-    /* TODO: recursive in-order walk over t->root calling fn(key, value, ctx). */
+    inorder_walk(t->root, fn, ctx);
 }
 
 int rb_validate(const rbtree_t *t)
@@ -153,6 +157,49 @@ void rb_destroy(rbtree_t *t)
 }
 
 /* ---- helper bodies ---- */
+
+
+static void rotate_left(rbtree_t *t, struct rb_node *x)
+{
+    struct rb_node *y = x->right;
+    x->right = y->left;
+
+    if (y->left != NIL) {
+        y->left->parent = x;
+    }
+    
+    y->parent = x->parent;
+
+    if (x->parent==NIL) {
+        t->root = y;
+    }
+
+    else if (x == x->parent->left) {
+        x->parent->left = y;
+    }
+    else {x->parent->right = y;
+    }
+
+    y->left=x;
+    x->parent = y;
+}
+
+
+
+static void inorder_walk(
+    struct rb_node *n,
+    void (*fn)(const char *key, void *value, void *ctx),
+    void *ctx)
+{
+    if (n == NIL) {
+        return;
+    }
+
+    inorder_walk(n->left, fn, ctx);
+    fn(n->key, n->value, ctx);
+    inorder_walk(n->right, fn, ctx);
+}
+
 
 static struct rb_node *bst_search(const rbtree_t *t, const char *key,
                                    struct rb_node **out_parent)
