@@ -158,6 +158,134 @@ static void test_destroy_null_is_noop(void)
     rb_destroy(NULL);
 }
 
+/* ---- rb_delete ----
+ * Each case builds a tree via an insert sequence hand-traced against
+ * CLRS RB-INSERT-FIXUP (same technique as the whitebox fixup tests in
+ * test_rbtree_internal.c) so the shape/color at the delete site is known
+ * without needing white-box access to node internals, deletes one key,
+ * and checks the public contract on the result: the key is gone, size
+ * dropped by one, every surviving key is still findable, and
+ * rb_validate() -- which independently re-derives order, red-red, and
+ * black-height -- still holds. Table-driven since every case follows
+ * this same build/delete/assert shape. */
+struct delete_case {
+    const char *name;
+    const char **setup_keys;
+    size_t setup_count;
+    const char *key_to_delete;
+    size_t expected_size_after;
+    const char **remaining_keys;
+    size_t remaining_count;
+};
+
+/* m(B) root, d(B)/t(B) both black with one red leaf child each: b is a
+ * red leaf. Deleting a red leaf changes no black-height and creates no
+ * red-red conflict, so no fixup should be needed at all. */
+static const char *case_red_leaf_setup[] = { "m", "d", "t", "b" };
+static const char *case_red_leaf_remaining[] = { "m", "d", "t" };
+
+/* d,b,f,a builds d(B)[b(B)[a(R),NIL], f(B)[NIL,NIL]] (uncle-red recolor
+ * fires on inserting a). f is a black leaf; its sibling b is black with
+ * one red child (a) -- deleting f drives delete_fixup's case 3/4 (a
+ * rotation around the parent, not just a recolor), with a real sibling
+ * to rebalance against. */
+static const char *case_black_leaf_setup[] = { "d", "b", "f", "a" };
+static const char *case_black_leaf_remaining[] = { "a", "b", "d" };
+
+/* Single-node tree: the root is also a black leaf. Deleting it is the
+ * degenerate case of root removal -- no siblings, no parent, tree must
+ * end up empty (root == NIL, size 0) and still validate. */
+static const char *case_root_setup[] = { "m" };
+
+/* d,b,f,e builds d(B)[b(B),f(B)[e(R),NIL]] (uncle-red recolor fires on
+ * inserting e). Deleting the root d: its right subtree's minimum is e,
+ * which is NOT d's direct child (e hangs off f, deeper in the subtree)
+ * -- covers the two-children path where the successor must first be
+ * unlinked from its own spot before replacing z. */
+static const char *case_two_children_deep_successor_setup[] = { "d", "b", "f", "e" };
+static const char *case_two_children_deep_successor_remaining[] = { "b", "e", "f" };
+
+static const struct delete_case delete_cases[] = {
+    {
+        .name = "test_delete_red_leaf_needs_no_fixup",
+        .setup_keys = case_red_leaf_setup,
+        .setup_count = sizeof(case_red_leaf_setup) / sizeof(case_red_leaf_setup[0]),
+        .key_to_delete = "b",
+        .expected_size_after = 3,
+        .remaining_keys = case_red_leaf_remaining,
+        .remaining_count = sizeof(case_red_leaf_remaining) / sizeof(case_red_leaf_remaining[0]),
+    },
+    {
+        .name = "test_delete_black_leaf_with_sibling_triggers_fixup",
+        .setup_keys = case_black_leaf_setup,
+        .setup_count = sizeof(case_black_leaf_setup) / sizeof(case_black_leaf_setup[0]),
+        .key_to_delete = "f",
+        .expected_size_after = 3,
+        .remaining_keys = case_black_leaf_remaining,
+        .remaining_count = sizeof(case_black_leaf_remaining) / sizeof(case_black_leaf_remaining[0]),
+    },
+    {
+        .name = "test_delete_root_of_single_node_tree",
+        .setup_keys = case_root_setup,
+        .setup_count = sizeof(case_root_setup) / sizeof(case_root_setup[0]),
+        .key_to_delete = "m",
+        .expected_size_after = 0,
+        .remaining_keys = NULL,
+        .remaining_count = 0,
+    },
+    {
+        .name = "test_delete_two_children_successor_deeper_in_subtree",
+        .setup_keys = case_two_children_deep_successor_setup,
+        .setup_count = sizeof(case_two_children_deep_successor_setup) / sizeof(case_two_children_deep_successor_setup[0]),
+        .key_to_delete = "d",
+        .expected_size_after = 3,
+        .remaining_keys = case_two_children_deep_successor_remaining,
+        .remaining_count = sizeof(case_two_children_deep_successor_remaining) / sizeof(case_two_children_deep_successor_remaining[0]),
+    },
+};
+
+static void run_delete_case(const struct delete_case *c)
+{
+    printf("%s\n", c->name);
+    rbtree_t *t = rb_create(NULL);
+    int values[16];
+
+    for (size_t i = 0; i < c->setup_count; i++) {
+        values[i] = (int)i;
+        CHECK(rb_insert(t, c->setup_keys[i], &values[i]) == 0, "setup insert should succeed");
+    }
+    CHECK(rb_validate(t) == 0, "sanity: setup tree must be valid before deleting");
+
+    CHECK(rb_delete(t, c->key_to_delete) == 0, "delete should report success for a present key");
+
+    CHECK(rb_size(t) == c->expected_size_after, "size should reflect the removed key");
+    CHECK(rb_find(t, c->key_to_delete) == NULL, "deleted key must no longer be found");
+    CHECK(rb_validate(t) == 0, "tree must remain a valid red-black tree after delete");
+
+    for (size_t i = 0; i < c->remaining_count; i++) {
+        CHECK(rb_find(t, c->remaining_keys[i]) != NULL, "surviving key should still be findable");
+    }
+
+    rb_destroy(t);
+}
+
+/* Deleting a key that was never inserted must report absence and leave
+ * the tree completely untouched. */
+static void test_delete_absent_key_returns_error(void)
+{
+    printf("test_delete_absent_key_returns_error\n");
+    rbtree_t *t = rb_create(NULL);
+    int value = 0;
+
+    rb_insert(t, "present", &value);
+
+    CHECK(rb_delete(t, "missing") == -1, "deleting an absent key should return -1");
+    CHECK(rb_size(t) == 1, "size must be unchanged after a failed delete");
+    CHECK(rb_find(t, "present") != NULL, "existing key must be unaffected by a failed delete");
+
+    rb_destroy(t);
+}
+
 int main(void)
 {
     test_create_returns_empty_tree();
@@ -168,6 +296,11 @@ int main(void)
     test_insert_copies_key();
     test_size_reflects_distinct_key_count();
     test_destroy_null_is_noop();
+
+    for (size_t i = 0; i < sizeof(delete_cases) / sizeof(delete_cases[0]); i++) {
+        run_delete_case(&delete_cases[i]);
+    }
+    test_delete_absent_key_returns_error();
 
     if (failures > 0) {
         fprintf(stderr, "%d check(s) failed\n", failures);

@@ -48,6 +48,9 @@ static int is_red(const struct rb_node *n);
 static void rotate_left(rbtree_t *t, struct rb_node *x);
 static void rotate_right(rbtree_t *t, struct rb_node *x);
 static void insert_fixup(rbtree_t *t, struct rb_node *z);
+static void replace_child(rbtree_t *t, struct rb_node *u, struct rb_node *v);
+static struct rb_node *tree_minimum(struct rb_node *n);
+static void delete_fixup(rbtree_t *t, struct rb_node *x, struct rb_node *x_parent);
 static int check_bst_order(const struct rb_node *n, const char **prev);
 static int check_rb_shape(const struct rb_node *n, size_t *count);
 
@@ -118,13 +121,51 @@ void *rb_find(const rbtree_t *t, const char *key)
 
 int rb_delete(rbtree_t *t, const char *key)
 {
-    (void)t;
-    (void)key;
-    /* TODO: bst_search() for the node; splice it out via a replace_child()
-     * helper (using a subtree-minimum helper for the two-children case);
-     * delete_fixup() if the spliced-out node was black; free its key/value
-     * and itself; size--. */
-    return -1;
+    struct rb_node *z = bst_search(t, key, NULL);
+    if (z == NIL) {
+        return -1;
+    }
+
+    struct rb_node *y = z;
+    enum color y_original_color = y->color;
+    struct rb_node *x;
+    struct rb_node *x_parent;
+
+    if (z->left == NIL) {
+        x = z->right;
+        x_parent = z->parent;
+        replace_child(t, z, z->right);
+    } else if (z->right == NIL) {
+        x = z->left;
+        x_parent = z->parent;
+        replace_child(t, z, z->left);
+    } else {
+        y = tree_minimum(z->right);
+        y_original_color = y->color;
+        x = y->right;
+
+        if (y->parent == z) {
+            x_parent = y;
+        } else {
+            x_parent = y->parent;
+            replace_child(t, y, y->right);
+            y->right = z->right;
+            y->right->parent = y;
+        }
+        replace_child(t, z, y);
+        y->left = z->left;
+        y->left->parent = y;
+        y->color = z->color;
+    }
+
+    if (y_original_color == BLACK) {
+        delete_fixup(t, x, x_parent);
+    }
+
+    node_destroy(t, z);
+    t->size--;
+
+    return 0;
 }
 
 size_t rb_size(const rbtree_t *t)
@@ -276,6 +317,105 @@ static void insert_fixup(rbtree_t *t, struct rb_node *z)
         }
     }
     t->root->color = BLACK;
+}
+
+/* CLRS RB-TRANSPLANT: rewires u's parent to point at v in u's old slot.
+ * v's parent is only written when v is a real node, preserving the
+ * invariant (upheld throughout this file) that NIL's fields are never
+ * mutated. */
+static void replace_child(rbtree_t *t, struct rb_node *u, struct rb_node *v)
+{
+    if (u->parent == NIL) {
+        t->root = v;
+    } else if (u == u->parent->left) {
+        u->parent->left = v;
+    } else {
+        u->parent->right = v;
+    }
+
+    if (v != NIL) {
+        v->parent = u->parent;
+    }
+}
+
+/* invariant: n is always a node of the subtree whose minimum is sought;
+ * each iteration strictly descends left, so it terminates at the
+ * leftmost real node. */
+static struct rb_node *tree_minimum(struct rb_node *n)
+{
+    while (n->left != NIL) {
+        n = n->left;
+    }
+    return n;
+}
+
+/* CLRS RB-DELETE-FIXUP, parameterized on x's parent explicitly (x_parent)
+ * instead of reading x->parent, since x may be NIL and this file never
+ * mutates NIL's fields (see replace_child above). x_parent is only ever
+ * dereferenced here when x is a real node too far from the root for the
+ * loop to have already exited, so it is always a genuine tree node at
+ * every point it's read.
+ *
+ * invariant: each iteration either clears the "extra black" deficiency at
+ * x outright (recolor+rotate, cases 1/3/4 below) or pushes it one level
+ * up the tree (case 2, x becomes x_parent), so the loop terminates once x
+ * turns red or reaches the root. */
+static void delete_fixup(rbtree_t *t, struct rb_node *x, struct rb_node *x_parent)
+{
+    while (x != t->root && !is_red(x)) {
+        if (x == x_parent->left) {
+            struct rb_node *w = x_parent->right; /* sibling; never NIL here */
+            if (is_red(w)) {
+                w->color = BLACK;
+                x_parent->color = RED;
+                rotate_left(t, x_parent);
+                w = x_parent->right;
+            }
+            if (!is_red(w->left) && !is_red(w->right)) {
+                w->color = RED;
+                x = x_parent;
+                x_parent = x->parent;
+            } else {
+                if (!is_red(w->right)) {
+                    w->left->color = BLACK;
+                    w->color = RED;
+                    rotate_right(t, w);
+                    w = x_parent->right;
+                }
+                w->color = BLACK;
+                x_parent->color = RED;
+                rotate_left(t, x_parent);
+                x = t->root;
+            }
+        } else {
+            struct rb_node *w = x_parent->left; /* sibling; never NIL here */
+            if (is_red(w)) {
+                w->color = BLACK;
+                x_parent->color = RED;
+                rotate_right(t, x_parent);
+                w = x_parent->left;
+            }
+            if (!is_red(w->left) && !is_red(w->right)) {
+                w->color = RED;
+                x = x_parent;
+                x_parent = x->parent;
+            } else {
+                if (!is_red(w->left)) {
+                    w->right->color = BLACK;
+                    w->color = RED;
+                    rotate_left(t, w);
+                    w = x_parent->left;
+                }
+                w->color = BLACK;
+                x_parent->color = RED;
+                rotate_right(t, x_parent);
+                x = t->root;
+            }
+        }
+    }
+    if (x != NIL) {
+        x->color = BLACK;
+    }
 }
 
 /* In-order walk enforcing strictly increasing keys. *prev starts NULL and
