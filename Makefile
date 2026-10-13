@@ -1,7 +1,7 @@
 CC := gcc
 CFLAGS := -std=c23 -Wall -Wextra -Werror -g -O1 -Iinclude
-SRC := src/rbtree.c
-TSRC := tests/test_rbtree.c
+SRC := src/rbtree.c src/pool.c
+TSRC := tests/test_rbtree.c tests/fault_alloc.c
 ISRC := tests/test_rbtree_internal.c
 BIN := build/test_rbtree
 FUZZBIN := build/fuzz
@@ -11,17 +11,17 @@ all: $(BIN) $(FUZZBIN) $(IBIN)
 
 $(BIN): $(SRC) $(TSRC) include/rbtree.h
 	@mkdir -p build
-	$(CC) $(CFLAGS) $(SRC) $(TSRC) -o $@
+	$(CC) $(CFLAGS) $(SRC) $(TSRC) -o $@ -lpthread
 
-$(FUZZBIN): $(SRC) tests/fuzz.c include/rbtree.h
+$(FUZZBIN): $(SRC) tests/fuzz.c tests/fault_alloc.c include/rbtree.h
 	@mkdir -p build
-	$(CC) $(CFLAGS) $(SRC) tests/fuzz.c -o $@
+	$(CC) $(CFLAGS) $(SRC) tests/fuzz.c tests/fault_alloc.c -o $@ -lpthread
 
 # ISRC #includes rbtree.c directly (white-box access to node internals),
-# so SRC is not compiled/linked separately here.
-$(IBIN): $(ISRC) $(SRC) include/rbtree.h
+# so rbtree.c is not compiled/linked separately here.
+$(IBIN): $(ISRC) $(SRC) tests/fault_alloc.c include/rbtree.h
 	@mkdir -p build
-	$(CC) $(CFLAGS) $(ISRC) -o $@
+	$(CC) $(CFLAGS) $(ISRC) src/pool.c tests/fault_alloc.c -o $@ -lpthread
 
 test: $(BIN) $(FUZZBIN) $(IBIN)
 	./$(BIN) && ./$(FUZZBIN) 100000 && ./$(IBIN)

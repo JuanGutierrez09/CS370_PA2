@@ -1,4 +1,5 @@
 #include "rbtree.h"
+#include "../tests/fault_alloc.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -58,7 +59,7 @@ static int check_rb_shape(const struct rb_node *n, size_t *count);
 
 rbtree_t *rb_create(rb_value_free_fn value_free)
 {
-    rbtree_t *t = malloc(sizeof *t);
+    rbtree_t *t = rb_malloc(sizeof *t);
     if (t == NULL) {
         return NULL;
     }
@@ -109,7 +110,7 @@ int rb_insert(rbtree_t *t, const char *key, void *value)
     return 0;
 
 cleanup_node:
-    free(z);
+    rb_free(z);
     return -1;
 }
 
@@ -212,7 +213,7 @@ void rb_destroy(rbtree_t *t)
         return;
     }
     free_subtree(t, t->root);
-    free(t);
+    rb_free(t);
 }
 
 /* ---- helper bodies ---- */
@@ -514,7 +515,7 @@ static struct rb_node *bst_search(const rbtree_t *t, const char *key,
 static char *copy_key(const char *key)
 {
     size_t len = strlen(key) + 1;
-    char *copy = malloc(len);
+    char *copy = rb_malloc(len);
     if (copy == NULL) {
         return NULL;
     }
@@ -524,7 +525,7 @@ static char *copy_key(const char *key)
 
 static struct rb_node *node_alloc(void)
 {
-    struct rb_node *n = malloc(sizeof *n);
+    struct rb_node *n = rb_malloc(sizeof *n);
     if (n == NULL) {
         return NULL;
     }
@@ -541,11 +542,11 @@ static struct rb_node *node_alloc(void)
 
 static void node_destroy(rbtree_t *t, struct rb_node *n)
 {
-    free(n->key);
+    rb_free(n->key);
     if (t->value_free != NULL) {
         t->value_free(n->value);
     }
-    free(n);
+    rb_free(n);
 }
 
 static void free_subtree(rbtree_t *t, struct rb_node *n)
