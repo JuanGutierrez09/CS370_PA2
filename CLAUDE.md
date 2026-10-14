@@ -5,8 +5,6 @@
 - A change is DONE only when all three pass. Always run them; show output.
 - On the macOS dev machine: `make CC=gcc-15 test` (Apple gcc rejects -std=c23).
   asan and memcheck need a Linux machine.
-- TODO: M0 was committed on `make test` only. Re-run `make asan` and
-  `make memcheck` on Linux, then delete this line.
 ## Hard constraints
 - NEVER modify include/rbtree.h. It is the graded contract.
 - All heap allocation in src/ goes through rb_malloc/rb_free
